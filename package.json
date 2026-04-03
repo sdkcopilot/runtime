@@ -1,0 +1,11 @@
+{
+  "name": "sdkcopilot-runtime",
+  "private": true,
+  "packageManager": "pnpm@10.30.2",
+  "scripts": {
+    "build": "pnpm --filter @sdkcopilot/runtime build",
+    "test": "pnpm --filter @sdkcopilot/runtime test",
+    "typecheck": "pnpm --filter @sdkcopilot/runtime typecheck",
+    "clean": "pnpm --filter @sdkcopilot/runtime clean"
+  }
+}
