@@ -2,6 +2,16 @@
   "name": "@sdkcopilot/runtime",
   "version": "0.1.0",
   "description": "Shared runtime used by SDKCopilot-generated TypeScript SDKs.",
+  "license": "PolyForm-Shield-1.0.0",
+  "homepage": "https://sdkcopilot.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sdkcopilot/runtime.git",
+    "directory": "typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/sdkcopilot/runtime/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,6 +20,9 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist"
