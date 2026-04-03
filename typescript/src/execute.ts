@@ -1,7 +1,16 @@
-import type { ContentCategory, RequestConfig, RequestParams, RuntimeResult } from "./types.js";
+import type {
+  BuilderTypes,
+  ContentCategory,
+  RequestConfig,
+  RequestParams,
+  ValidationMode,
+  ValidationWarning,
+  ValidatorFn,
+} from "./types.js";
 import { buildUrl } from "./url.js";
 import { resolveAuth } from "./auth.js";
 import { serializeBody, parseResponseBody } from "./body.js";
+import { resolveValidationConfig, toValidationWarnings, validateInputSection } from "./validation.js";
 
 function toStringRecord(obj: unknown): Record<string, string> {
   if (!obj || typeof obj !== "object") return {};
@@ -34,43 +43,117 @@ function categorizeContentType(raw: string): "json" | "text" | "csv" | "xml" | "
   return "other";
 }
 
+function validateRequestBody(
+  validator: ValidatorFn | Record<string, ValidatorFn> | undefined,
+  body: unknown,
+  contentType: string | undefined,
+  bodyRequired: boolean,
+  mode: ValidationMode,
+): ValidationWarning[] {
+  if (!validator || mode === "off") return [];
+  if (body === undefined && !bodyRequired) return [];
+
+  if (typeof validator === "function") {
+    return validateInputSection("input", validator, body);
+  }
+
+  const key = contentType ?? "application/json";
+  const bodyValidator = validator[key]
+    ?? validator["application/json"]
+    ?? validator[Object.keys(validator)[0] ?? ""];
+  return validateInputSection("input", bodyValidator, body);
+}
+
 /**
  * Execute an HTTP request using native fetch.
  * Works in both browser and Node.js 18+.
  */
-export async function executeRequest<T>(
+export async function executeRequest<TResult, T extends BuilderTypes = BuilderTypes>(
   config: RequestConfig,
-  params: RequestParams,
-): Promise<RuntimeResult<T>> {
-  // Resolve base URL (operation override > config)
-  const baseUrl = params.baseUrl ?? config.baseUrl;
+  {
+    method,
+    path,
+    baseUrl = config.baseUrl,
+    queryStyles,
+    validators,
+    inputValidators,
+    bodyRequired = false,
+    params: {
+      path: pathParams,
+      query,
+      headers: paramHeaders,
+      cookies: paramCookies,
+      body: paramBody,
+      contentType: paramContentType,
+      auth: paramAuth,
+      validation: paramValidation,
+    },
+  }: RequestParams<T>,
+): Promise<TResult> {
+  const validation = resolveValidationConfig(config.validation, paramValidation);
+  const inputWarnings = validation.input === "off"
+    ? []
+    : [
+        ...validateInputSection("input", inputValidators?.path, pathParams ?? {}),
+        ...validateInputSection("input", inputValidators?.query, query ?? {}),
+        ...validateInputSection("input", inputValidators?.headers, paramHeaders ?? {}),
+        ...validateInputSection("input", inputValidators?.cookies, paramCookies ?? {}),
+        ...validateRequestBody(
+          inputValidators?.body,
+          paramBody,
+          paramContentType,
+          bodyRequired,
+          validation.input,
+        ),
+      ];
 
-  // Resolve auth (per-request override > config-level)
-  const auth = params.auth !== undefined ? params.auth : config.auth;
+  if (inputWarnings.length > 0) {
+    config.onValidationWarning?.(inputWarnings);
+    if (validation.input === "strict") {
+      const response = new Response(null, { status: 422, statusText: "Input Validation Failed" });
+      return {
+        ok: false,
+        status: 422,
+        contentType: "other" as ContentCategory,
+        rawContentType: "",
+        response,
+        error: {
+          type: "validation",
+          phase: "input",
+          data: {
+            path: pathParams,
+            query,
+            headers: paramHeaders,
+            cookies: paramCookies,
+            body: paramBody,
+            contentType: paramContentType,
+          },
+          errors: inputWarnings,
+        },
+      } as TResult;
+    }
+  }
+
+  const auth = paramAuth !== undefined ? paramAuth : config.auth;
   const { headers: authHeaders, queryParams: authQueryParams } = resolveAuth(auth);
+  const mergedQuery = Object.assign({}, query as Record<string, unknown> | undefined, authQueryParams);
 
-  // Merge query params with auth query params
-  const mergedQuery = { ...params.queryParams, ...authQueryParams };
-
-  // Build URL
   const url = buildUrl(
     baseUrl,
-    params.path,
-    params.pathParams,
+    path,
+    pathParams as Record<string, unknown> | undefined,
     mergedQuery,
-    params.queryStyles,
+    queryStyles,
   );
 
-  // Serialize body
-  const { body, contentType } = serializeBody(params.body, params.contentType);
+  const { body, contentType } = serializeBody(paramBody, paramContentType);
 
-  // Build headers
   const headers: Record<string, string> = {
     ...config.headers,
     ...authHeaders,
-    ...toStringRecord(params.headers),
+    ...toStringRecord(paramHeaders),
   };
-  const cookieHeader = serializeCookies(params.cookies);
+  const cookieHeader = serializeCookies(paramCookies as Record<string, unknown> | undefined);
   if (cookieHeader) {
     headers["Cookie"] = headers["Cookie"] ? `${headers["Cookie"]}; ${cookieHeader}` : cookieHeader;
   }
@@ -86,7 +169,7 @@ export async function executeRequest<T>(
   try {
     // Build request
     const request = new Request(url, {
-      method: params.method.toUpperCase(),
+      method: method.toUpperCase(),
       headers,
       body,
       signal: controller.signal,
@@ -103,34 +186,50 @@ export async function executeRequest<T>(
     config.onResponse?.(response);
 
     // Parse response
-    const isError = response.status >= 400;
-    const responseData = await parseResponseBody(response, isError);
+    const isOk = response.status < 400;
+    const responseData = await parseResponseBody(response, !isOk);
     const rawContentType = response.headers.get("content-type") ?? "application/octet-stream";
     const contentType = categorizeContentType(rawContentType);
+    const base = { status: response.status, contentType, rawContentType, response };
 
-    if (isError) {
-      return {
-        ok: false,
-        status: response.status,
-        contentType,
-        rawContentType,
-        error: { type: "http", status: response.status, matchedStatus: String(response.status), data: responseData },
-        response,
-      };
+    let warnings: ValidationWarning[] = [...inputWarnings];
+    const statusCode = String(response.status);
+    const statusClass = `${statusCode[0]}XX`;
+    const matchedStatus = validators?.[statusCode]
+      ? statusCode
+      : validators?.[statusClass]
+        ? statusClass
+        : validators?.default
+          ? "default"
+          : statusCode;
+    const validate = validators?.[matchedStatus];
+    if (validate && validation.output !== "off" && contentType === "json") {
+      const valid = validate(responseData, { instancePath: "data" });
+      if (!valid && validate.errors) {
+        const outputWarnings = toValidationWarnings("output", validate.errors);
+        warnings.push(...outputWarnings);
+        config.onValidationWarning?.(outputWarnings);
+        if (validation.output === "strict") {
+          return {
+            ok: false,
+            error: { type: "validation", phase: "output", data: responseData, errors: outputWarnings },
+            ...base,
+          } as TResult;
+        }
+      }
     }
 
-    return {
-      ok: true,
-      status: response.status,
-      contentType,
-      rawContentType,
-      data: responseData as T,
-      warnings: [],
-      response,
-    };
+    if (!isOk) {
+      return {
+        ok: false,
+        error: { type: "http", status: response.status, matchedStatus, data: responseData },
+        ...base,
+      } as TResult;
+    }
+
+    return { ok: true, data: responseData, warnings, ...base } as TResult;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      // Create a minimal Response for timeout errors
       const response = new Response(null, { status: 408, statusText: "Timeout" });
       return {
         ok: false,
@@ -139,7 +238,7 @@ export async function executeRequest<T>(
         rawContentType: "",
         error: { type: "timeout", timeoutMs: timeout },
         response,
-      };
+      } as TResult;
     }
 
     const response = new Response(null, { status: 502, statusText: "Network Error" });
@@ -148,9 +247,9 @@ export async function executeRequest<T>(
       status: 502,
       contentType: "other" as ContentCategory,
       rawContentType: "",
-      error: { type: "network", cause: err },
-      response,
-    };
+        error: { type: "network", cause: err },
+        response,
+      } as TResult;
   } finally {
     clearTimeout(timeoutId);
   }

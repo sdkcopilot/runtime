@@ -1,6 +1,6 @@
 {
   "name": "@sdkcopilot/runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared runtime used by SDKCopilot-generated TypeScript SDKs.",
   "license": "PolyForm-Shield-1.0.0",
   "homepage": "https://sdkcopilot.com",

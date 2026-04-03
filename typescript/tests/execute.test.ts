@@ -27,9 +27,11 @@ describe("runtime executeRequest", () => {
       {
         method: "get",
         path: "/orders/{id}",
-        pathParams: { id: 123 },
-        queryParams: { expand: "lineItems" },
-        cookies: { session: "abc" },
+        params: {
+          path: { id: 123 },
+          query: { expand: "lineItems" },
+          cookies: { session: "abc" },
+        },
       },
     );
 
@@ -59,6 +61,7 @@ describe("runtime executeRequest", () => {
       {
         method: "get",
         path: "/orders/404",
+        params: {},
       },
     );
 
@@ -81,16 +84,15 @@ describe("runtime executeRequest", () => {
       {
         baseUrl: "https://api.example.com",
         timeout: 1,
-        fetch: (request: Request) =>
+        fetch: async () =>
           new Promise<Response>((_, reject) => {
-            request.signal.addEventListener("abort", () => {
-              reject(new DOMException("Aborted", "AbortError"));
-            });
+            setTimeout(() => reject(new DOMException("Aborted", "AbortError")), 5);
           }),
       },
       {
         method: "get",
         path: "/slow",
+        params: {},
       },
     );
 
@@ -114,6 +116,7 @@ describe("runtime executeRequest", () => {
       {
         method: "get",
         path: "/broken",
+        params: {},
       },
     );
 
