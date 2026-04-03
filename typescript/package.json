@@ -29,6 +29,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepack": "node ./scripts/sync-license.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
