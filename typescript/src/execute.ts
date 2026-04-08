@@ -161,10 +161,13 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
     headers["Content-Type"] = contentType;
   }
 
-  // Setup abort controller for timeout
-  const controller = new AbortController();
-  const timeout = config.timeout ?? 30_000;
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  // Only enforce a timeout when one is explicitly configured.
+  const hasTimeout = Number.isFinite(config.timeout) && (config.timeout ?? 0) > 0;
+  const controller = hasTimeout ? new AbortController() : null;
+  const timeout = hasTimeout ? (config.timeout as number) : undefined;
+  const timeoutId = hasTimeout && controller
+    ? setTimeout(() => controller.abort(), timeout)
+    : null;
 
   try {
     // Build request
@@ -172,7 +175,7 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
       method: method.toUpperCase(),
       headers,
       body,
-      signal: controller.signal,
+      signal: controller?.signal,
     });
 
     // Call onRequest hook
@@ -229,14 +232,14 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
 
     return { ok: true, data: responseData, warnings, ...base } as TResult;
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (hasTimeout && err instanceof DOMException && err.name === "AbortError") {
       const response = new Response(null, { status: 408, statusText: "Timeout" });
       return {
         ok: false,
         status: 408,
         contentType: "other" as ContentCategory,
         rawContentType: "",
-        error: { type: "timeout", timeoutMs: timeout },
+        error: { type: "timeout", timeoutMs: timeout as number },
         response,
       } as TResult;
     }
@@ -251,6 +254,8 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
         response,
       } as TResult;
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
