@@ -195,7 +195,7 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
     const contentType = categorizeContentType(rawContentType);
     const base = { status: response.status, contentType, rawContentType, response };
 
-    let warnings: ValidationWarning[] = [...inputWarnings];
+    const warnings: ValidationWarning[] = [...inputWarnings];
     const statusCode = String(response.status);
     const statusClass = `${statusCode[0]}XX`;
     const matchedStatus = validators?.[statusCode]

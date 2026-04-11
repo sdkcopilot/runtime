@@ -1,22 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import { gzipSync } from "node:zlib";
 import { executeRequest } from "../src/execute.js";
+import type { RuntimeResult } from "../src/types.js";
 
 describe("runtime executeRequest", () => {
   it("uses config.fetch and returns the shared success envelope", async () => {
-    const fetchMock = vi.fn(async (request: Request) => {
+    const fetchMock = vi.fn((request: Request) => {
       expect(request.url).toBe("https://api.example.com/orders/123?expand=lineItems");
       expect(request.headers.get("authorization")).toBe("Bearer token");
       expect(request.headers.get("cookie")).toBe("session=abc");
-      return new Response(JSON.stringify({ id: 123 }), {
+      return Promise.resolve(new Response(JSON.stringify({ id: 123 }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      });
+      }));
     });
 
     const onRequest = vi.fn();
     const onResponse = vi.fn();
 
-    const result = await executeRequest<{ id: number }>(
+    const result = await executeRequest<RuntimeResult<{ id: number }>>(
       {
         baseUrl: "https://api.example.com",
         auth: { bearer: "token" },
@@ -46,17 +48,21 @@ describe("runtime executeRequest", () => {
       data: { id: 123 },
       warnings: [],
     });
+
+    if (result.ok) {
+      expect(result.data.id).toBe(123);
+    }
   });
 
   it("returns typed http-style failures with response metadata", async () => {
-    const result = await executeRequest<{ id: number }>(
+    const result = await executeRequest<RuntimeResult<{ id: number }, { "404": { message: string } }>>(
       {
         baseUrl: "https://api.example.com",
-        fetch: async () =>
-          new Response(JSON.stringify({ message: "Missing" }), {
+        fetch: () =>
+          Promise.resolve(new Response(JSON.stringify({ message: "Missing" }), {
             status: 404,
             headers: { "content-type": "application/json; charset=utf-8" },
-          }),
+          })),
       },
       {
         method: "get",
@@ -79,8 +85,118 @@ describe("runtime executeRequest", () => {
     }
   });
 
+  it("decodes gzip-compressed JSON responses before parsing", async () => {
+    const compressed = gzipSync(JSON.stringify({ id: 456 }));
+
+    const result = await executeRequest<RuntimeResult<{ id: number }>>(
+      {
+        baseUrl: "https://api.example.com",
+        fetch: () =>
+          Promise.resolve(new Response(compressed, {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-encoding": "gzip",
+            },
+          })),
+      },
+      {
+        method: "get",
+        path: "/orders/456",
+        params: {},
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      contentType: "json",
+      rawContentType: "application/json",
+      data: { id: 456 },
+      warnings: [],
+    });
+  });
+
+  it("falls back safely when fetch already returns a decoded body with gzip header preserved", async () => {
+    const result = await executeRequest<RuntimeResult<{ id: number }>>(
+      {
+        baseUrl: "https://api.example.com",
+        fetch: () =>
+          Promise.resolve(new Response(JSON.stringify({ id: 789 }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-encoding": "gzip",
+            },
+          })),
+      },
+      {
+        method: "get",
+        path: "/orders/789",
+        params: {},
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      contentType: "json",
+      rawContentType: "application/json",
+      data: { id: 789 },
+      warnings: [],
+    });
+  });
+
+  it("uses the fflate fallback when DecompressionStream is unavailable", async () => {
+    const compressed = gzipSync(JSON.stringify({ id: 987 }));
+    const originalDecompressionStream = globalThis.DecompressionStream;
+
+    // Simulate an older runtime without native streaming decompression support.
+    Object.defineProperty(globalThis, "DecompressionStream", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const result = await executeRequest<RuntimeResult<{ id: number }>>(
+        {
+          baseUrl: "https://api.example.com",
+          fetch: () =>
+            Promise.resolve(new Response(compressed, {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+              },
+            })),
+        },
+        {
+          method: "get",
+          path: "/orders/987",
+          params: {},
+        },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        status: 200,
+        contentType: "json",
+        rawContentType: "application/json",
+        data: { id: 987 },
+        warnings: [],
+      });
+    } finally {
+      Object.defineProperty(globalThis, "DecompressionStream", {
+        value: originalDecompressionStream,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   it("returns a timeout failure with 408 status", async () => {
-    const result = await executeRequest(
+    const result = await executeRequest<RuntimeResult<never>>(
       {
         baseUrl: "https://api.example.com",
         timeout: 1,
@@ -106,10 +222,10 @@ describe("runtime executeRequest", () => {
   });
 
   it("returns a network failure with 502 status", async () => {
-    const result = await executeRequest(
+    const result = await executeRequest<RuntimeResult<never>>(
       {
         baseUrl: "https://api.example.com",
-        fetch: async () => {
+        fetch: () => {
           throw new Error("socket hang up");
         },
       },
