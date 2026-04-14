@@ -7,7 +7,7 @@ export function buildUrl(
   pathParams?: Record<string, unknown>,
   queryParams?: Record<string, unknown>,
   queryStyles?: Record<string, { style: string; explode: boolean }>,
-): string {
+): URL {
   // Substitute path params
   let resolvedPath = path;
   if (pathParams) {
@@ -37,7 +37,7 @@ export function buildUrl(
     }
   }
 
-  return url;
+  return new URL(url);
 }
 
 function serializeQueryParam(

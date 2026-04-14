@@ -1,6 +1,6 @@
 import type {
-  BuilderTypes,
   ContentCategory,
+  OperationRequest,
   RequestConfig,
   RequestParams,
   ValidationMode,
@@ -68,7 +68,7 @@ function validateRequestBody(
  * Execute an HTTP request using native fetch.
  * Works in both browser and Node.js 18+.
  */
-export async function executeRequest<TResult, T extends BuilderTypes = BuilderTypes>(
+export async function executeRequest<T extends OperationRequest = OperationRequest, TResult = unknown>(
   config: RequestConfig,
   {
     method,
@@ -170,20 +170,20 @@ export async function executeRequest<TResult, T extends BuilderTypes = BuilderTy
     : null;
 
   try {
-    // Build request
-    const request = new Request(url, {
+    // Build request options
+    const requestInit: RequestInit = {
       method: method.toUpperCase(),
       headers,
       body,
       signal: controller?.signal,
-    });
+    };
 
     // Call onRequest hook
-    config.onRequest?.(request);
+    config.onRequest?.(url, requestInit);
 
     // Execute
     const fetchFn = config.fetch ?? fetch;
-    const response = await fetchFn(request);
+    const response = await fetchFn(url, requestInit);
 
     // Call onResponse hook
     config.onResponse?.(response);

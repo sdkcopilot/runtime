@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { gzipSync } from "node:zlib";
 import { executeRequest } from "../src/execute.js";
-import type { RuntimeResult } from "../src/types.js";
+import type { OperationRequest, RuntimeResult } from "../src/types.js";
 
 describe("runtime executeRequest", () => {
   it("uses config.fetch and returns the shared success envelope", async () => {
-    const fetchMock = vi.fn((request: Request) => {
-      expect(request.url).toBe("https://api.example.com/orders/123?expand=lineItems");
-      expect(request.headers.get("authorization")).toBe("Bearer token");
-      expect(request.headers.get("cookie")).toBe("session=abc");
+    const fetchMock = vi.fn((url: URL, init: RequestInit) => {
+      expect(url.toString()).toBe("https://api.example.com/orders/123?expand=lineItems");
+      // The auth header is "Authorization" (capital A), not "authorization"
+      // Handle the fact that headers in RequestInit might be different format
+      const headers = new Headers(init.headers);
+      expect(headers.get("Authorization")).toBe("Bearer token");
+      expect(headers.get("cookie")).toBe("session=abc");
       return Promise.resolve(new Response(JSON.stringify({ id: 123 }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -18,7 +21,7 @@ describe("runtime executeRequest", () => {
     const onRequest = vi.fn();
     const onResponse = vi.fn();
 
-    const result = await executeRequest<RuntimeResult<{ id: number }>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<{ id: number }>>(
       {
         baseUrl: "https://api.example.com",
         auth: { bearer: "token" },
@@ -55,7 +58,7 @@ describe("runtime executeRequest", () => {
   });
 
   it("returns typed http-style failures with response metadata", async () => {
-    const result = await executeRequest<RuntimeResult<{ id: number }, { "404": { message: string } }>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<{ id: number }, { "404": { message: string } }>>(
       {
         baseUrl: "https://api.example.com",
         fetch: () =>
@@ -88,7 +91,7 @@ describe("runtime executeRequest", () => {
   it("decodes gzip-compressed JSON responses before parsing", async () => {
     const compressed = gzipSync(JSON.stringify({ id: 456 }));
 
-    const result = await executeRequest<RuntimeResult<{ id: number }>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<{ id: number }>>(
       {
         baseUrl: "https://api.example.com",
         fetch: () =>
@@ -118,7 +121,7 @@ describe("runtime executeRequest", () => {
   });
 
   it("falls back safely when fetch already returns a decoded body with gzip header preserved", async () => {
-    const result = await executeRequest<RuntimeResult<{ id: number }>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<{ id: number }>>(
       {
         baseUrl: "https://api.example.com",
         fetch: () =>
@@ -159,7 +162,7 @@ describe("runtime executeRequest", () => {
     });
 
     try {
-      const result = await executeRequest<RuntimeResult<{ id: number }>>(
+      const result = await executeRequest<OperationRequest, RuntimeResult<{ id: number }>>(
         {
           baseUrl: "https://api.example.com",
           fetch: () =>
@@ -196,7 +199,7 @@ describe("runtime executeRequest", () => {
   });
 
   it("returns a timeout failure with 408 status", async () => {
-    const result = await executeRequest<RuntimeResult<never>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<never>>(
       {
         baseUrl: "https://api.example.com",
         timeout: 1,
@@ -222,7 +225,7 @@ describe("runtime executeRequest", () => {
   });
 
   it("returns a network failure with 502 status", async () => {
-    const result = await executeRequest<RuntimeResult<never>>(
+    const result = await executeRequest<OperationRequest, RuntimeResult<never>>(
       {
         baseUrl: "https://api.example.com",
         fetch: () => {

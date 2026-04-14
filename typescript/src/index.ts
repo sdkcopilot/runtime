@@ -4,17 +4,14 @@ export { serializeBody, parseResponseBody } from "./body.js";
 export { resolveAuth } from "./auth.js";
 export { parseCsv } from "./csv.js";
 export { resolveValidationConfig, toValidationWarnings, validateInputSection } from "./validation.js";
-export { RequestBuilder } from "./types.js";
 export type {
-  BuilderTypes,
   CsvFieldType,
   CsvParseOptions,
   CsvParseResult,
   CsvSchema,
   Operation,
   OperationNoParams,
-  OperationParams,
-  PublicBuilder,
+  OperationRequest,
   RequestConfig,
   RequestParams,
   RuntimeResult,
